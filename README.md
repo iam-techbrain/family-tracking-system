@@ -9,16 +9,17 @@
 ## 📑 Table of Contents
 
 1. [Architectural Overview](#-architectural-overview)
-2. [Monorepo Directory Structure](#-monorepo-directory-structure)
-3. [Database Architecture (23 Core Entities)](#-database-architecture-23-core-entities)
-4. [Backend Engine (`backend/`)](#-backend-engine-backend)
-5. [React Web Dashboard & PWA (`web/`)](#-react-web-dashboard--pwa-web)
-6. [Flutter Android Mobile App (`android/`)](#-flutter-android-mobile-app-android)
-7. [Security, Privacy & Data Protection](#-security-privacy--data-protection)
-8. [Git & Repository Security Rules](#-git--repository-security-rules)
-9. [Local Development & Quickstart](#-local-development--quickstart)
-10. [API Reference & Live Endpoints](#-api-reference--live-endpoints)
-11. [Multi-Phase Roadmap & Status](#-multi-phase-roadmap--status)
+2. [Visual Architecture & Flowcharts](#-visual-architecture--flowcharts)
+3. [Monorepo Directory Structure](#-monorepo-directory-structure)
+4. [Database Architecture (23 Core Entities)](#-database-architecture-23-core-entities)
+5. [Backend Engine (`backend/`)](#-backend-engine-backend)
+6. [React Web Dashboard & PWA (`web/`)](#-react-web-dashboard--pwa-web)
+7. [Flutter Android Mobile App (`android/`)](#-flutter-android-mobile-app-android)
+8. [Security, Privacy & Data Protection](#-security-privacy--data-protection)
+9. [Git & Repository Security Rules](#-git--repository-security-rules)
+10. [Local Development & Quickstart](#-local-development--quickstart)
+11. [API Reference & Live Endpoints](#-api-reference--live-endpoints)
+12. [Multi-Phase Roadmap & Status](#-multi-phase-roadmap--status)
 
 ---
 
@@ -51,6 +52,171 @@ The system consists of three primary components coordinated through a centralize
 - **Backend**: Node.js LTS, Express.js, TypeScript, Prisma ORM, MySQL 8, Socket.IO, Argon2id, Zod, Pino.
 - **Web Dashboard**: React 18, Vite, TypeScript, Tailwind CSS, TanStack Query, Zustand, Leaflet OpenStreetMap.
 - **Android App**: Flutter Stable, Dart, Riverpod, Dio, flutter_map, sqflite (offline queue), flutter_secure_storage.
+
+---
+
+## 🔄 Visual Architecture & Flowcharts
+
+### 1. End-to-End System & Technology Flowchart
+
+This diagram illustrates how the Android Mobile App, React Web Dashboard, Express Backend, MySQL Database, Redis, and Push Notification services interconnect:
+
+```mermaid
+flowchart TD
+    subgraph Clients["Clients Layer"]
+        A["Flutter Android App\n(Background GPS, Riverpod, SQLite)"]
+        W["React Web Dashboard / PWA\n(Vite, Tailwind, Leaflet OSM, Zustand)"]
+    end
+
+    subgraph Gateway["Express.js Backend (Node.js & TypeScript)"]
+        AUTH["Auth & JWT Interceptor\n(Argon2id, Rotated Tokens)"]
+        REST["REST API Endpoints\n(/locations, /families, /sos, /chat)"]
+        WS["Socket.IO Server\n(Authenticated Rooms)"]
+        GEO["Geofencing Engine\n(Server-side Safe Zone Logic)"]
+        CRON["Retention Scheduler\n(7-Day Auto Purge)"]
+    end
+
+    subgraph Data["Database & Storage Layer"]
+        MYSQL[("MySQL 8.0 Database\n(Prisma ORM - 23 Entities)")]
+        REDIS[("Redis 7 Cache / Broker\n(Optional Scaling)")]
+        SQLITE[("SQLite Offline DB\n(Android Local Queue)")]
+    end
+
+    subgraph Alerts["Push Notification Services"]
+        FCM["Firebase Cloud Messaging (FCM)\n(Android Native Notifications)"]
+        WP["Web Push (VAPID)\n(Desktop & Mobile Browsers)"]
+    end
+
+    %% Client Interactions
+    A -- "1. GPS Sample (~5 min)\n(REST /locations)" --> AUTH
+    A -- "Offline Backup" --> SQLITE
+    SQLITE -. "Flush on Reconnect" .-> REST
+    A <--> |Real-Time Socket| WS
+    W <--> |REST API & WebSocket| AUTH
+
+    %% Backend Routing
+    AUTH --> REST
+    AUTH --> WS
+    REST --> GEO
+    REST --> MYSQL
+    WS <--> REDIS
+    CRON --> MYSQL
+
+    %% Push Triggers
+    GEO -- "Safe Zone Arrival/Exit" --> FCM
+    GEO -- "Safe Zone Arrival/Exit" --> WP
+    REST -- "SOS Panic Broadcast" --> FCM
+    REST -- "SOS Panic Broadcast" --> WP
+    FCM --> A
+    WP --> W
+```
+
+---
+
+### 2. Live Location Tracking & Family Map Synchronization Flow
+
+This flowchart describes the lifecycle of a location update from device capture to family map visualization:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Member as Member (Android Device)
+    participant LocalDB as SQLite (Offline Queue)
+    participant API as Express Backend (/locations)
+    participant DB as MySQL (current_locations & history)
+    participant Socket as Socket.IO (Family Room)
+    actor Family as Family Members (Web & Android)
+
+    Note over Member: Foreground/Background Service wakes up (~5 min)
+    Member->>Member: Capture GPS (lat, lng, accuracy, battery, speed)
+
+    alt Internet Connected
+        Member->>API: POST /api/v1/locations (with client UUID)
+        activate API
+        API->>API: Verify Bearer JWT & Explicit Consent
+        API->>DB: Upsert current_locations & Insert location_history
+        API->>Socket: Emit location:update to family:ID room
+        API-->>Member: 200 OK (Uploaded successfully)
+        deactivate API
+        Socket-->>Family: Broadcast location:update event
+        Family->>Family: Update Leaflet/Flutter Map marker & battery %
+    else Device Offline / No Internet
+        Member->>LocalDB: Enqueue coordinate with GPS timestamp
+        Note over LocalDB: Persisted safely in SQLite queue
+        Note over Member: Internet Restores
+        Member->>API: POST /api/v1/locations/batch (Flushes pending queue)
+        API->>DB: Deduplicate and save all pending breadcrumbs
+        LocalDB->>LocalDB: Purge uploaded records from device
+    end
+```
+
+---
+
+### 3. Safe Zone & Geofence Alert Notification Flow
+
+This diagram illustrates how the system notifies family members when someone enters or exits a predefined Safe Zone (e.g., Home, School, Office):
+
+```mermaid
+flowchart TD
+    START([New GPS Location Uploaded]) --> CHECK_CONSENT{Does Member Allow\nSafe Zone Alerts?}
+    CHECK_CONSENT -- No --> STOP([Discard Geofence Checks])
+    CHECK_CONSENT -- Yes --> FETCH_ZONES[Fetch Active Safe Zones for Family]
+
+    FETCH_ZONES --> CALC[Calculate Haversine Distance to Zone Center]
+    CALC --> WITHIN{Distance <= Radius?}
+
+    WITHIN -- Yes & Was Outside --> ENTER_EVENT[Generate GEOFENCE_ENTER Event]
+    WITHIN -- No & Was Inside --> EXIT_EVENT[Generate GEOFENCE_EXIT Event]
+    WITHIN -- State Unchanged --> STOP
+
+    ENTER_EVENT --> SAVE_EVENT[Save into geofence_events Table]
+    EXIT_EVENT --> SAVE_EVENT
+
+    SAVE_EVENT --> COOLDOWN{Within Anti-Spam\nCooldown Window?}
+    COOLDOWN -- Yes --> LOG_ONLY([Log event without sending spam])
+    COOLDOWN -- No --> DISPATCH[Dispatch Push Notifications]
+
+    DISPATCH --> FCM_NOTIF[Send FCM Push to Android Devices:\n'Alex has arrived at Home']
+    DISPATCH --> WEB_NOTIF[Send Web Push to Browsers:\n'Alex has arrived at Home']
+    DISPATCH --> SOCKET_NOTIF[Emit Socket.IO geofence:entered]
+```
+
+---
+
+### 4. Emergency SOS Alert Broadcast & Acknowledgment Flow
+
+This flowchart illustrates the high-priority life-safety workflow triggered when a family member presses the SOS button:
+
+```mermaid
+flowchart TD
+    TAP([User Taps Emergency SOS Button]) --> CONFIRM{Quick Confirm or\nEmergency Accessibility?}
+    CONFIRM -- Cancel --> CANCELLED([SOS Aborted])
+    CONFIRM -- Confirm --> CAPTURE[Lock Current GPS Coordinates & Battery Level]
+
+    CAPTURE --> EMIT_API[POST /api/v1/sos with eventId deduplication]
+
+    subgraph Backend Engine
+        EMIT_API --> SAVE_SOS[Save SOS Alert into MySQL - Status: ACTIVE]
+        SAVE_SOS --> AUDIT[Record in audit_logs Table]
+        SAVE_SOS --> BROADCAST_WS[Broadcast High-Priority Socket.IO 'sos:triggered']
+        SAVE_SOS --> PUSH_ALERTS[Trigger Priority FCM & Web Push Notifications]
+    end
+
+    BROADCAST_WS --> FAMILY_DEVICES[All Connected Family Devices Alarm in Real Time]
+    PUSH_ALERTS --> FAMILY_DEVICES
+
+    subgraph Family Member Response
+        FAMILY_DEVICES --> ACK[Family Member Taps 'Acknowledge']
+        ACK --> RECORD_ACK[POST /api/v1/sos/:id/acknowledge]
+        RECORD_ACK --> UPDATE_ACK[Update sos_recipients in MySQL]
+
+        FAMILY_DEVICES --> CALL[Tap 'Call National Emergency' / 112]
+        CALL --> DIALER[Native Phone Dialer Opens Directly]
+    end
+
+    UPDATE_ACK --> RESOLVE[Incident Resolved by Family Owner/Admin]
+    RESOLVE --> RESOLVED_STATE([Status: RESOLVED & Archived])
+```
 
 ---
 
