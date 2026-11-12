@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: family_circle_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_super_secure_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-family_circle}
+      MYSQL_USER: ${MYSQL_USER:-family_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-family_password}
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --explicit_defaults_for_timestamp=1
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/prisma/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER:-family_user}", "-p${MYSQL_PASSWORD:-family_password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - family_circle_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: family_circle_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - family_circle_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: family_circle_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      BIND_ADDRESS: 0.0.0.0
+      DATABASE_URL: mysql://${MYSQL_USER:-family_user}:${MYSQL_PASSWORD:-family_password}@mysql:3306/${MYSQL_DATABASE:-family_circle}
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-CHANGE_ME_GENERATE_SECURE_RANDOM_ACCESS_SECRET_32_BYTES_MIN}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-CHANGE_ME_GENERATE_SECURE_RANDOM_REFRESH_SECRET_32_BYTES_MIN}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    ports:
+      - "4000:4000"
+    networks:
+      - family_circle_net
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  family_circle_net:
+    driver: bridge
+

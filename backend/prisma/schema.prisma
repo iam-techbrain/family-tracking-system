@@ -1,0 +1,577 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// ENUMS
+// -------------------------------------------------------------
+
+enum FamilyRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum DevicePlatform {
+  ANDROID
+  WEB
+  OTHER
+}
+
+enum GeofenceEventType {
+  ENTER
+  EXIT
+}
+
+enum SosStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+  CANCELLED
+}
+
+enum MessageReceiptStatus {
+  DELIVERED
+  READ
+}
+
+enum NotificationCategory {
+  SOS
+  INVITATION
+  MESSAGE
+  GEOFENCE_ENTER
+  GEOFENCE_EXIT
+  SHARING_STOPPED
+  SYSTEM
+}
+
+enum CallType {
+  PHONE_DIALER
+  FUTURE_WEBRTC
+}
+
+// -------------------------------------------------------------
+// 1. USERS
+// -------------------------------------------------------------
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String
+  fullName        String
+  phoneNumber     String?
+  avatarUrl       String?
+  isActive        Boolean   @default(true)
+  emailVerified   Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relational mappings
+  settings                 UserSettings?
+  locationSharingSettings LocationSharingSettings?
+  devices                  Device[]
+  refreshSessions          RefreshSession[]
+  passwordResetTokens      PasswordResetToken[]
+  currentLocation          CurrentLocation?
+  locationHistory          LocationHistory[]
+  familyMemberships        FamilyMember[]
+  ownedFamilies            Family[]                 @relation("FamilyOwner")
+  sentInvitations          FamilyInvitation[]       @relation("SentInvitations")
+  safeZoneMemberships      SafeZoneMember[]
+  geofenceEvents           GeofenceEvent[]
+  sosAlerts                SosAlert[]               @relation("SosTriggeredBy")
+  sosReceipts              SosRecipient[]
+  conversationMemberships  ConversationMember[]
+  messagesSent             Message[]
+  messageReceipts          MessageReceipt[]
+  notifications            Notification[]
+  pushSubscriptions        PushSubscription[]
+  callLogsInitiated        CallLog[]                @relation("CallInitiator")
+  callLogsReceived         CallLog[]                @relation("CallRecipient")
+  auditLogs                AuditLog[]
+
+  @@map("users")
+}
+
+// -------------------------------------------------------------
+// 2. USER SETTINGS
+// -------------------------------------------------------------
+model UserSettings {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theme                 String   @default("system")
+  language              String   @default("en")
+  notificationSounds    Boolean  @default(true)
+  vibrationEnabled      Boolean  @default(true)
+  locationRetentionDays Int      @default(7)
+  staleThresholdMinutes Int      @default(10)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("user_settings")
+}
+
+// -------------------------------------------------------------
+// 3. FAMILIES
+// -------------------------------------------------------------
+model Family {
+  id          String   @id @default(uuid())
+  name        String
+  ownerId     String
+  owner       User     @relation("FamilyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members       FamilyMember[]
+  invitations   FamilyInvitation[]
+  safeZones     SafeZone[]
+  conversations Conversation[]
+  sosAlerts     SosAlert[]
+
+  @@map("families")
+}
+
+// -------------------------------------------------------------
+// 4. FAMILY MEMBERS
+// -------------------------------------------------------------
+model FamilyMember {
+  id        String     @id @default(uuid())
+  familyId  String
+  family    Family     @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      FamilyRole @default(MEMBER)
+  nickname  String?
+  joinedAt  DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([familyId, userId])
+  @@index([userId])
+  @@index([familyId])
+  @@map("family_members")
+}
+
+// -------------------------------------------------------------
+// 5. FAMILY INVITATIONS
+// -------------------------------------------------------------
+model FamilyInvitation {
+  id          String           @id @default(uuid())
+  familyId    String
+  family      Family           @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  invitedById String
+  invitedBy   User             @relation("SentInvitations", fields: [invitedById], references: [id], onDelete: Cascade)
+  inviteCode  String           @unique
+  email       String?
+  role        FamilyRole       @default(MEMBER)
+  status      InvitationStatus @default(PENDING)
+  expiresAt   DateTime
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([familyId])
+  @@index([inviteCode])
+  @@map("family_invitations")
+}
+
+// -------------------------------------------------------------
+// 6. DEVICES
+// -------------------------------------------------------------
+model Device {
+  id          String         @id @default(uuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId    String
+  deviceName  String
+  platform    DevicePlatform @default(ANDROID)
+  osVersion   String?
+  appVersion  String?
+  fcmToken    String?        @db.Text
+  isActive    Boolean        @default(true)
+  lastSeenAt  DateTime       @default(now())
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+  @@map("devices")
+}
+
+// -------------------------------------------------------------
+// 7. REFRESH SESSIONS
+// -------------------------------------------------------------
+model RefreshSession {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId    String?
+  tokenHash   String    @unique
+  ipAddress   String?
+  userAgent   String?   @db.Text
+  isRevoked   Boolean   @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("refresh_sessions")
+}
+
+// -------------------------------------------------------------
+// PASSWORD RESET TOKENS
+// -------------------------------------------------------------
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// -------------------------------------------------------------
+// 8. LOCATION SHARING SETTINGS
+// -------------------------------------------------------------
+model LocationSharingSettings {
+  id                         String    @id @default(uuid())
+  userId                     String    @unique
+  user                       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shareCurrentLocation       Boolean   @default(true)
+  shareLocationHistory       Boolean   @default(true)
+  allowSafeZoneAlerts        Boolean   @default(true)
+  receiveFamilyNotifications Boolean   @default(true)
+  pausedUntil                DateTime?
+  updatedAt                  DateTime  @updatedAt
+
+  @@map("location_sharing_settings")
+}
+
+// -------------------------------------------------------------
+// 9. CURRENT LOCATIONS
+// -------------------------------------------------------------
+model CurrentLocation {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId          String?
+  latitude          Decimal  @db.Decimal(10, 7)
+  longitude         Decimal  @db.Decimal(10, 7)
+  accuracy          Decimal? @db.Decimal(8, 2)
+  speed             Decimal? @db.Decimal(8, 2)
+  heading           Decimal? @db.Decimal(6, 2)
+  batteryPercentage Int?
+  isCharging        Boolean?
+  isMoving          Boolean?
+  isSharingEnabled  Boolean  @default(true)
+  gpsTimestamp      DateTime
+  serverReceivedAt  DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@map("current_locations")
+}
+
+// -------------------------------------------------------------
+// 10. LOCATION HISTORY
+// -------------------------------------------------------------
+model LocationHistory {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId          String?
+  eventId           String?  // Client unique event id for deduplication
+  latitude          Decimal  @db.Decimal(10, 7)
+  longitude         Decimal  @db.Decimal(10, 7)
+  accuracy          Decimal? @db.Decimal(8, 2)
+  speed             Decimal? @db.Decimal(8, 2)
+  heading           Decimal? @db.Decimal(6, 2)
+  batteryPercentage Int?
+  isCharging        Boolean?
+  isMoving          Boolean?
+  gpsTimestamp      DateTime
+  serverReceivedAt  DateTime @default(now())
+
+  @@unique([userId, eventId])
+  @@index([userId, gpsTimestamp])
+  @@index([userId, serverReceivedAt])
+  @@map("location_history")
+}
+
+// -------------------------------------------------------------
+// 11. SAFE ZONES
+// -------------------------------------------------------------
+model SafeZone {
+  id           String   @id @default(uuid())
+  familyId     String
+  family       Family   @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  name         String
+  latitude     Decimal  @db.Decimal(10, 7)
+  longitude    Decimal  @db.Decimal(10, 7)
+  radiusMeters Decimal  @db.Decimal(8, 2)
+  color        String   @default("#3B82F6")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  members SafeZoneMember[]
+  events  GeofenceEvent[]
+
+  @@index([familyId])
+  @@map("safe_zones")
+}
+
+// -------------------------------------------------------------
+// 12. SAFE ZONE MEMBERS
+// -------------------------------------------------------------
+model SafeZoneMember {
+  id                 String    @id @default(uuid())
+  safeZoneId         String
+  safeZone           SafeZone  @relation(fields: [safeZoneId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notifyOnEntry      Boolean   @default(true)
+  notifyOnExit       Boolean   @default(true)
+  isInside           Boolean   @default(false)
+  lastStateChangeAt  DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([safeZoneId, userId])
+  @@index([userId])
+  @@map("safe_zone_members")
+}
+
+// -------------------------------------------------------------
+// 13. GEOFENCE EVENTS
+// -------------------------------------------------------------
+model GeofenceEvent {
+  id         String            @id @default(uuid())
+  safeZoneId String
+  safeZone   SafeZone          @relation(fields: [safeZoneId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventType  GeofenceEventType
+  latitude   Decimal           @db.Decimal(10, 7)
+  longitude  Decimal           @db.Decimal(10, 7)
+  accuracy   Decimal?          @db.Decimal(8, 2)
+  occurredAt DateTime
+  createdAt  DateTime          @default(now())
+
+  @@index([userId, occurredAt])
+  @@index([safeZoneId, occurredAt])
+  @@map("geofence_events")
+}
+
+// -------------------------------------------------------------
+// 14. SOS ALERTS
+// -------------------------------------------------------------
+model SosAlert {
+  id                String    @id @default(uuid())
+  familyId          String
+  family            Family    @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User      @relation("SosTriggeredBy", fields: [userId], references: [id], onDelete: Cascade)
+  status            SosStatus @default(ACTIVE)
+  latitude          Decimal?  @db.Decimal(10, 7)
+  longitude         Decimal?  @db.Decimal(10, 7)
+  accuracy          Decimal?  @db.Decimal(8, 2)
+  batteryPercentage Int?
+  message           String?
+  eventId           String?   @unique
+  triggeredAt       DateTime  @default(now())
+  resolvedAt        DateTime?
+  resolvedById      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  recipients SosRecipient[]
+
+  @@index([familyId, status])
+  @@index([userId])
+  @@map("sos_alerts")
+}
+
+// -------------------------------------------------------------
+// 15. SOS RECIPIENTS
+// -------------------------------------------------------------
+model SosRecipient {
+  id              String    @id @default(uuid())
+  sosAlertId      String
+  sosAlert        SosAlert  @relation(fields: [sosAlertId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hasAcknowledged Boolean   @default(false)
+  acknowledgedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([sosAlertId, userId])
+  @@index([userId])
+  @@map("sos_recipients")
+}
+
+// -------------------------------------------------------------
+// 16. CONVERSATIONS
+// -------------------------------------------------------------
+model Conversation {
+  id        String   @id @default(uuid())
+  familyId  String
+  family    Family   @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  isGroup   Boolean  @default(true)
+  title     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
+
+  @@index([familyId])
+  @@map("conversations")
+}
+
+// -------------------------------------------------------------
+// 17. CONVERSATION MEMBERS
+// -------------------------------------------------------------
+model ConversationMember {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt     DateTime?
+  joinedAt       DateTime     @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_members")
+}
+
+// -------------------------------------------------------------
+// 18. MESSAGES
+// -------------------------------------------------------------
+model Message {
+  id              String   @id @default(uuid())
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId        String
+  sender          User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content         String       @db.Text
+  clientMessageId String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  receipts MessageReceipt[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+// -------------------------------------------------------------
+// 19. MESSAGE RECEIPTS
+// -------------------------------------------------------------
+model MessageReceipt {
+  id        String               @id @default(uuid())
+  messageId String
+  message   Message              @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    MessageReceiptStatus @default(DELIVERED)
+  timestamp DateTime             @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("message_receipts")
+}
+
+// -------------------------------------------------------------
+// 20. NOTIFICATIONS
+// -------------------------------------------------------------
+model Notification {
+  id        String               @id @default(uuid())
+  userId    String
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category  NotificationCategory
+  title     String
+  body      String               @db.Text
+  data      Json?
+  isRead    Boolean              @default(false)
+  readAt    DateTime?
+  createdAt DateTime             @default(now())
+
+  @@index([userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+// -------------------------------------------------------------
+// 21. PUSH SUBSCRIPTIONS
+// -------------------------------------------------------------
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique @db.VarChar(512)
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  userAgent String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// -------------------------------------------------------------
+// 22. CALL LOGS
+// -------------------------------------------------------------
+model CallLog {
+  id                String   @id @default(uuid())
+  initiatorId       String
+  initiator         User     @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  recipientId       String
+  recipient         User     @relation("CallRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  targetPhoneNumber String
+  callType          CallType @default(PHONE_DIALER)
+  createdAt         DateTime @default(now())
+
+  @@index([initiatorId])
+  @@index([recipientId])
+  @@map("call_logs")
+}
+
+// -------------------------------------------------------------
+// 23. AUDIT LOGS
+// -------------------------------------------------------------
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action       String
+  resourceType String
+  resourceId   String?
+  details      Json?
+  ipAddress    String?
+  userAgent    String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+

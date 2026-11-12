@@ -1,0 +1,96 @@
+# =====================================================================
+# Family Circle - Master Git Ignore Configuration
+# =====================================================================
+
+# -------------------------------------------------------------
+# OS & System Junk
+# -------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+
+# -------------------------------------------------------------
+# IDEs & Editor Configuration
+# -------------------------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+
+# -------------------------------------------------------------
+# Environment & Secrets (NEVER PUSH TO GITHUB)
+# -------------------------------------------------------------
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+
+# Firebase & Cloud Credentials
+serviceAccountKey.json
+firebase-admin-key.json
+google-services.json
+GoogleService-Info.plist
+
+# -------------------------------------------------------------
+# Node.js & Web (Backend / Web Dashboard)
+# -------------------------------------------------------------
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+.prisma/client/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+# -------------------------------------------------------------
+# Android & Flutter Mobile
+# -------------------------------------------------------------
+**/.dart_tool/
+**/.packages
+**/.pub/
+**/.pub-cache/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# Android Build & Keystores
+**/android/.gradle/
+**/android/app/build/
+**/android/build/
+**/android/local.properties
+**/android/captures/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Local Offline Databases (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# -------------------------------------------------------------
+# Docker & Local Volumes
+# -------------------------------------------------------------
+mysql_data/
+redis_data/
